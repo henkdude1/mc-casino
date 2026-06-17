@@ -2,7 +2,7 @@
 -- Change BASE to your repo's raw URL, then pastebin this file.
 -- On the bank computer: pastebin run <code>
 
-local BASE = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/bank"
+local BASE = "https://raw.githubusercontent.com/henkdude1/mc-casino/main/bank"
 
 local files = {
     "lib/protocol.lua",
