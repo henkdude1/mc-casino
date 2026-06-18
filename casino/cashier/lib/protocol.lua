@@ -5,7 +5,7 @@ local M = {}
 
 M.PROTOCOL = "casino_bank"
 M.HOSTNAME  = "bank"
-M.SECRET    = "CHANGE_ME"   -- change this to the same value on all machines
+M.SECRET    = "GayVonGayRafe"   -- must match on all machines
 M.TIMEOUT   = 5             -- seconds to wait for a bank reply
 
 -- Look up the bank, send a request, and wait for the reply.
