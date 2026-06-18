@@ -20,7 +20,7 @@ local ui    = require("lib.ui")
 local CFG = {
     COIN         = "numismatics:cog",
     depositName  = "minecraft:chest_0",    -- chest where players place cogs to deposit
-    vaultName    = "minecraft:barrel_0",   -- internal storage barrel
+    vaultName    = "sophisticatedbackpacks:backpack_0",   -- internal storage
     payoutName   = "minecraft:chest_1",    -- payout chest (funnel/pipe this to the player)
     monitorName  = "",                     -- exact monitor name; "" or nil = auto-find
     driveSide    = "left",                 -- side the disk drive is attached to
