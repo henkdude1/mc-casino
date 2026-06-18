@@ -292,9 +292,8 @@ local function main()
                 handleTouch(ui.hit(buttons, x, y))
             end
 
-        elseif name == "timer" and ev[2] == pollTimer then
+        elseif name == "timer" then
             autoDeposit()
-            pollTimer = os.startTimer(CFG.POLL_INTERVAL)
 
         elseif name == "disk" then
             if STATE == "INSERT" then enterMenu() end
@@ -304,6 +303,12 @@ local function main()
             amount, message = 0, ""
             STATE = "INSERT"
         end
+
+        -- Re-arm the deposit poll every iteration. A fresh timer each pass survives
+        -- bank-call (rednet.receive) filtered pulls that would otherwise swallow a
+        -- lone timer event and kill the polling chain permanently.
+        os.cancelTimer(pollTimer)
+        pollTimer = os.startTimer(CFG.POLL_INTERVAL)
     end
 end
 
