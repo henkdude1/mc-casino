@@ -26,6 +26,7 @@ local CFG = {
     driveSide    = "left",                 -- side the disk drive is attached to
     monitorScale = 1,                      -- monitor text scale (0.5 – 5)
     STEPS        = {1, 10, 100},           -- withdraw increment buttons
+    POLL_INTERVAL = 1,                     -- seconds between deposit-chest auto-sweeps
 }
 
 -- ─── Peripherals ──────────────────────────────────────────────────────────────
@@ -92,14 +93,20 @@ local function doWithdraw(currentID, amount)
     local ok, result = bankc.debit(currentID, amount)
     if not ok then return "Declined: " .. tostring(result) end
 
-    -- Push cogs directly from vault into the payout chest
+    -- Push cogs from the vault into the payout chest, re-scanning each pass so a
+    -- self-compacting vault (Sophisticated Backpack) can't strand a stale slot index.
     local remaining = amount
-    for slot, item in pairs(vault.list()) do
-        if remaining <= 0 then break end
-        if item.name == CFG.COIN then
-            local moved = vault.pushItems(CFG.payoutName, slot, math.min(remaining, item.count))
-            remaining = remaining - moved
+    while remaining > 0 do
+        local movedThisPass = 0
+        for slot, item in pairs(vault.list()) do
+            if remaining <= 0 then break end
+            if item.name == CFG.COIN then
+                local moved = vault.pushItems(CFG.payoutName, slot, math.min(remaining, item.count))
+                remaining     = remaining - moved
+                movedThisPass = movedThisPass + moved
+            end
         end
+        if movedThisPass == 0 then break end   -- target genuinely full / no cogs left
     end
 
     if remaining > 0 then
@@ -127,6 +134,16 @@ local function refreshBalance()
     if not currentID then balance = 0; return end
     local ok, res = bankc.balance(currentID)
     if ok then balance = res else balance = 0; message = "Bank: " .. tostring(res) end
+end
+
+-- Sweep any cogs waiting in the deposit chest onto the current card.
+-- Called on a timer (chute-fed) and on card insert. No-op without a card or cogs.
+local function autoDeposit()
+    if not currentID then return end
+    if countCogs(deposit) > 0 then
+        message = doDeposit(currentID)   -- counts, credits, sweeps to vault
+        refreshBalance()
+    end
 end
 
 -- ─── Rendering ────────────────────────────────────────────────────────────────
@@ -161,9 +178,9 @@ local function draw()
         ui.centerText(mon, 3, "CARD " .. tostring(currentID), colors.cyan)
         ui.centerText(mon, 5, "BALANCE", colors.white)
         ui.centerText(mon, 6, balance .. " credits", colors.lime)
+        ui.centerText(mon, 8, "Drop cogs in chest to deposit", colors.gray)
         ui.centerText(mon, h - 4, message, colors.gray)
         buttons = rowButtons({
-            { label = "DEPOSIT",  id = "deposit",  bg = colors.green },
             { label = "WITHDRAW", id = "withdraw", bg = colors.blue },
             { label = "EJECT",    id = "eject",    bg = colors.red },
         }, h - 2, 3)
@@ -205,10 +222,7 @@ local function handleTouch(id)
     if not id then return end
 
     if STATE == "MENU" then
-        if id == "deposit" then
-            message = doDeposit(currentID)
-            refreshBalance()
-        elseif id == "withdraw" then
+        if id == "withdraw" then
             amount, message = 0, ""
             STATE = "WITHDRAW"
         elseif id == "eject" then
@@ -253,6 +267,7 @@ local function enterMenu()
     if not currentID then STATE = "INSERT"; return end
     amount, message = 0, ""
     refreshBalance()
+    autoDeposit()        -- sweep any cogs already waiting in the chest
     STATE = "MENU"
 end
 
@@ -261,6 +276,8 @@ local function main()
 
     -- If a card is already present at boot, go straight to the menu.
     if card.id(CFG.driveSide) then enterMenu() else STATE = "INSERT" end
+
+    local pollTimer = os.startTimer(CFG.POLL_INTERVAL)
 
     while true do
         draw()
@@ -274,6 +291,10 @@ local function main()
                 local _, _, x, y = table.unpack(ev)
                 handleTouch(ui.hit(buttons, x, y))
             end
+
+        elseif name == "timer" and ev[2] == pollTimer then
+            autoDeposit()
+            pollTimer = os.startTimer(CFG.POLL_INTERVAL)
 
         elseif name == "disk" then
             if STATE == "INSERT" then enterMenu() end
