@@ -22,11 +22,11 @@ local CFG = {
     depositName  = "minecraft:chest_0",    -- chest where players place cogs to deposit
     vaultName    = "minecraft:barrel_0",   -- internal storage barrel
     payoutName   = "minecraft:chest_1",    -- payout chest (funnel/pipe this to the player)
+    monitorName  = "",                     -- exact monitor name; "" or nil = auto-find
     driveSide    = "left",                 -- side the disk drive is attached to
     monitorScale = 1,                      -- monitor text scale (0.5 – 5)
+    STEPS        = {1, 10, 100},           -- withdraw increment buttons
 }
-
-local status = "Ready"
 
 -- ─── Peripherals ──────────────────────────────────────────────────────────────
 
@@ -37,40 +37,18 @@ local function initPeripherals()
     deposit = peripheral.wrap(CFG.depositName)
     vault   = peripheral.wrap(CFG.vaultName)
     local payout = peripheral.wrap(CFG.payoutName)
-    mon     = peripheral.find("monitor")
+    if CFG.monitorName and CFG.monitorName ~= "" then
+        mon = peripheral.wrap(CFG.monitorName)
+        assert(mon, "Monitor not found: " .. CFG.monitorName)
+    else
+        mon = peripheral.find("monitor")
+        assert(mon, "No monitor found — attach an Advanced Monitor")
+    end
     assert(deposit, "Deposit chest not found: " .. CFG.depositName)
     assert(vault,   "Vault not found: "          .. CFG.vaultName)
     assert(payout,  "Payout chest not found: "   .. CFG.payoutName)
-end
-
--- ─── Monitor display ──────────────────────────────────────────────────────────
-
-local function updateMonitor(currentID)
-    if not mon then return end
+    assert(mon.isColor and mon.isColor(), "Monitor must be an Advanced (color) Monitor for touch")
     mon.setTextScale(CFG.monitorScale)
-    local w, h = mon.getSize()
-    ui.clear(mon)
-
-    ui.centerText(mon, 1, "* CASINO CASHIER *", colors.yellow)
-    ui.centerText(mon, 2, string.rep("-", w), colors.gray)
-
-    if currentID then
-        ui.centerText(mon, 4, "CARD ID:", colors.white)
-        ui.centerText(mon, 5, tostring(currentID), colors.cyan)
-
-        local ok, bal = bankc.balance(currentID)
-        if ok then
-            ui.centerText(mon, 7, "BALANCE", colors.white)
-            ui.centerText(mon, 8, tostring(bal) .. " credits", colors.lime)
-        else
-            ui.centerText(mon, 7, "Bank:", colors.red)
-            ui.centerText(mon, 8, tostring(bal), colors.red)
-        end
-    else
-        ui.centerText(mon, math.floor(h / 2), "INSERT CARD", colors.red)
-    end
-
-    ui.centerText(mon, h, status, colors.yellow)
 end
 
 -- ─── Inventory helpers ────────────────────────────────────────────────────────
@@ -133,79 +111,177 @@ local function doWithdraw(currentID, amount)
     return string.format("Paid out %d cogs!", amount)
 end
 
--- ─── Terminal UI ──────────────────────────────────────────────────────────────
+-- ─── Touchscreen state ────────────────────────────────────────────────────────
 
-local function printLine(color, text)
-    term.setTextColor(color or colors.white)
-    print(text)
-    term.setTextColor(colors.white)
+local STATE     = "INSERT"   -- INSERT | MENU | WITHDRAW | CONFIRM
+local currentID              -- disk ID of the inserted card
+local balance   = 0          -- cached account balance
+local amount    = 0          -- withdraw amount being built
+local message   = ""         -- status banner (last action result)
+local buttons   = {}         -- current hit-test descriptors
+
+local DEBOUNCE_MS = 300      -- ignore repeat touches within this window
+local lastTouch   = 0
+
+local function refreshBalance()
+    if not currentID then balance = 0; return end
+    local ok, res = bankc.balance(currentID)
+    if ok then balance = res else balance = 0; message = "Bank: " .. tostring(res) end
+end
+
+-- ─── Rendering ────────────────────────────────────────────────────────────────
+
+-- Lay out a row of evenly-spaced buttons across the screen width.
+local function rowButtons(defs, y, h)
+    local w = mon.getSize()
+    local n = #defs
+    local gap = 1
+    local bw = math.floor((w - (n + 1) * gap) / n)
+    local out = {}
+    local x = gap + 1
+    for _, d in ipairs(defs) do
+        out[#out + 1] = ui.button(mon, x, y, bw, h, d.label, d.bg, d.fg, d.id)
+        x = x + bw + gap
+    end
+    return out
+end
+
+local function draw()
+    local w, h = mon.getSize()
+    ui.clear(mon)
+    ui.centerText(mon, 1, "* CASINO CASHIER *", colors.yellow)
+
+    if STATE == "INSERT" then
+        ui.centerText(mon, math.floor(h / 2) - 1, "INSERT CARD", colors.red)
+        ui.centerText(mon, math.floor(h / 2) + 1, "TO BEGIN", colors.red)
+        ui.centerText(mon, h, message, colors.gray)
+        buttons = {}
+
+    elseif STATE == "MENU" then
+        ui.centerText(mon, 3, "CARD " .. tostring(currentID), colors.cyan)
+        ui.centerText(mon, 5, "BALANCE", colors.white)
+        ui.centerText(mon, 6, balance .. " credits", colors.lime)
+        ui.centerText(mon, h - 4, message, colors.gray)
+        buttons = rowButtons({
+            { label = "DEPOSIT",  id = "deposit",  bg = colors.green },
+            { label = "WITHDRAW", id = "withdraw", bg = colors.blue },
+            { label = "EJECT",    id = "eject",    bg = colors.red },
+        }, h - 2, 3)
+
+    elseif STATE == "WITHDRAW" then
+        ui.centerText(mon, 3, "BALANCE: " .. balance .. " credits", colors.lime)
+        ui.centerText(mon, 5, "WITHDRAW", colors.white)
+        ui.centerText(mon, 6, tostring(amount), colors.yellow)
+        ui.centerText(mon, h - 6, message, colors.gray)
+
+        local defs = {}
+        for _, step in ipairs(CFG.STEPS) do
+            defs[#defs + 1] = { label = "+" .. step, id = "step:" .. step, bg = colors.blue }
+        end
+        defs[#defs + 1] = { label = "ALL",   id = "all",   bg = colors.cyan, fg = colors.black }
+        defs[#defs + 1] = { label = "CLEAR", id = "clear", bg = colors.gray }
+        buttons = rowButtons(defs, h - 4, 3)
+
+        local okAmt = amount >= 1 and amount <= balance
+        local row2 = rowButtons({
+            { label = "BACK",     id = "back",     bg = colors.gray },
+            { label = "WITHDRAW", id = "confirm",  bg = okAmt and colors.green or colors.gray },
+        }, h - 1, 1)
+        for _, b in ipairs(row2) do buttons[#buttons + 1] = b end
+
+    elseif STATE == "CONFIRM" then
+        ui.centerText(mon, math.floor(h / 2) - 2, "Withdraw " .. amount .. " cogs?", colors.white)
+        ui.centerText(mon, math.floor(h / 2), "Balance: " .. balance, colors.lime)
+        buttons = rowButtons({
+            { label = "YES", id = "yes", bg = colors.green },
+            { label = "NO",  id = "no",  bg = colors.red },
+        }, h - 2, 3)
+    end
+end
+
+-- ─── Touch handling ───────────────────────────────────────────────────────────
+
+local function handleTouch(id)
+    if not id then return end
+
+    if STATE == "MENU" then
+        if id == "deposit" then
+            message = doDeposit(currentID)
+            refreshBalance()
+        elseif id == "withdraw" then
+            amount, message = 0, ""
+            STATE = "WITHDRAW"
+        elseif id == "eject" then
+            card.eject(CFG.driveSide)
+            -- disk_eject event resets to INSERT
+        end
+
+    elseif STATE == "WITHDRAW" then
+        if id:match("^step:") then
+            local step = tonumber(id:match("^step:(%d+)"))
+            amount = math.min(amount + step, balance)
+            message = ""
+        elseif id == "all" then
+            amount, message = balance, ""
+        elseif id == "clear" then
+            amount, message = 0, ""
+        elseif id == "back" then
+            message = ""
+            STATE = "MENU"
+        elseif id == "confirm" then
+            if amount >= 1 and amount <= balance then
+                STATE = "CONFIRM"
+            end
+        end
+
+    elseif STATE == "CONFIRM" then
+        if id == "yes" then
+            message = doWithdraw(currentID, amount)
+            refreshBalance()
+            amount = 0
+            STATE = "MENU"
+        elseif id == "no" then
+            STATE = "WITHDRAW"
+        end
+    end
+end
+
+-- ─── Main loop ────────────────────────────────────────────────────────────────
+
+local function enterMenu()
+    currentID = card.id(CFG.driveSide)
+    if not currentID then STATE = "INSERT"; return end
+    amount, message = 0, ""
+    refreshBalance()
+    STATE = "MENU"
 end
 
 local function main()
     initPeripherals()
 
+    -- If a card is already present at boot, go straight to the menu.
+    if card.id(CFG.driveSide) then enterMenu() else STATE = "INSERT" end
+
     while true do
-        local currentID = card.id(CFG.driveSide)
-        updateMonitor(currentID)
+        draw()
+        local ev = { os.pullEvent() }
+        local name = ev[1]
 
-        term.clear(); term.setCursorPos(1, 1)
-        printLine(colors.yellow, "=== CASINO CASHIER ===")
-
-        if currentID then
-            printLine(colors.cyan, "Card: " .. tostring(currentID))
-            local ok, bal = bankc.balance(currentID)
-            if ok then
-                printLine(colors.lime, "Balance: " .. tostring(bal) .. " credits")
-            else
-                printLine(colors.red, "Bank: " .. tostring(bal))
-            end
-        else
-            printLine(colors.red, "No card inserted.")
-        end
-
-        print()
-        print("[D] Deposit cogs from chest")
-        print("[W] Withdraw cogs (pay out)")
-        print("[B] Refresh balance")
-        print("[Q] Quit")
-        print()
-        printLine(colors.gray, "Status: " .. status)
-        io.write("> ")
-
-        local line = io.read()
-        if not line then break end
-        local choice = line:lower():match("^%s*(%a)")
-
-        if choice == "d" then
-            if not currentID then
-                status = "Insert a card first!"
-            else
-                status = doDeposit(currentID)
+        if name == "monitor_touch" then
+            local now = os.epoch("utc")
+            if now - lastTouch >= DEBOUNCE_MS then
+                lastTouch = now
+                local _, _, x, y = table.unpack(ev)
+                handleTouch(ui.hit(buttons, x, y))
             end
 
-        elseif choice == "w" then
-            if not currentID then
-                status = "Insert a card first!"
-            else
-                io.write("Amount to withdraw: ")
-                local amtStr = io.read()
-                local amt    = math.floor(tonumber(amtStr) or 0)
-                if amt > 0 then
-                    status = doWithdraw(currentID, amt)
-                else
-                    status = "Invalid amount"
-                end
-            end
+        elseif name == "disk" then
+            if STATE == "INSERT" then enterMenu() end
 
-        elseif choice == "b" then
-            status = "Refreshed."
-
-        elseif choice == "q" then
-            print("Goodbye.")
-            break
-
-        else
-            status = "Press D, W, B, or Q"
+        elseif name == "disk_eject" then
+            currentID = nil
+            amount, message = 0, ""
+            STATE = "INSERT"
         end
     end
 end

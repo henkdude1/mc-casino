@@ -30,4 +30,9 @@ function M.waitForRemove(side)
     end
 end
 
+-- Physically eject the card from the drive on `side`.
+function M.eject(side)
+    if disk.isPresent(side) then disk.eject(side) end
+end
+
 return M
