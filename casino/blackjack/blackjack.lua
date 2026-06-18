@@ -17,6 +17,7 @@ local card  = require("lib.card")
 local ui    = require("lib.ui")
 
 local CFG = {
+    monitorName  = "monitor_1",   -- exact monitor peripheral name; "" or nil = auto-find any monitor
     driveSide    = "left",        -- side the disk drive is attached to
     monitorScale = 0.5,           -- smaller scale = more room for cards (0.5 – 5)
     CHIPS        = {1, 5, 25, 100},
@@ -30,8 +31,13 @@ local mon
 
 local function initPeripherals()
     bankc.open()
-    mon = peripheral.find("monitor")
-    assert(mon, "No monitor found — attach an Advanced Monitor")
+    if CFG.monitorName and CFG.monitorName ~= "" then
+        mon = peripheral.wrap(CFG.monitorName)
+        assert(mon, "Monitor not found: " .. CFG.monitorName)
+    else
+        mon = peripheral.find("monitor")
+        assert(mon, "No monitor found — attach an Advanced Monitor")
+    end
     assert(mon.isColor and mon.isColor(), "Monitor must be an Advanced (color) Monitor for touch")
     mon.setTextScale(CFG.monitorScale)
 end
@@ -48,6 +54,9 @@ local deck, playerHand, dealerHand
 local revealHole  = false     -- show dealer's hole card?
 local canDouble   = false     -- double allowed right now?
 local buttons     = {}        -- current hit-test descriptors
+
+local DEBOUNCE_MS = 300       -- ignore repeat touches within this window (fixes double-hit)
+local lastTouch   = 0
 
 -- ─── Deck & hand maths ────────────────────────────────────────────────────────
 
@@ -348,8 +357,12 @@ local function main()
         local name = ev[1]
 
         if name == "monitor_touch" then
-            local _, _, x, y = table.unpack(ev)
-            handleTouch(ui.hit(buttons, x, y))
+            local now = os.epoch("utc")
+            if now - lastTouch >= DEBOUNCE_MS then
+                lastTouch = now
+                local _, _, x, y = table.unpack(ev)
+                handleTouch(ui.hit(buttons, x, y))
+            end
 
         elseif name == "disk" then
             if STATE == "INSERT" then startBetting() end
