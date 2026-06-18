@@ -19,7 +19,7 @@ local ui    = require("lib.ui")
 local CFG = {
     monitorName  = "monitor_1",   -- exact monitor peripheral name; "" or nil = auto-find any monitor
     driveSide    = "left",        -- side the disk drive is attached to
-    monitorScale = 0.5,           -- smaller scale = more room for cards (0.5 – 5)
+    monitorScale = 1,             -- 1.0 suits a 3×3 monitor; lower it on larger monitors for more room
     CHIPS        = {1, 5, 25, 100},
     MIN_BET      = 1,
     MAX_BET      = 500,
@@ -130,9 +130,14 @@ local function rowButtons(defs, y, h)
 end
 
 local function drawHand(hand, x, y, hideHole)
+    local w = mon.getSize()
+    local n = #hand
+    local spacing = 6
+    if n > 1 then spacing = math.floor((w - x - 5) / (n - 1)) end
+    spacing = math.max(3, math.min(6, spacing))
     for i, c in ipairs(hand) do
         local faceUp = not (hideHole and i == 2)
-        ui.card(mon, x + (i - 1) * 6, y, c.rank, c.suit, faceUp)
+        ui.card(mon, x + (i - 1) * spacing, y, c.rank, c.suit, faceUp)
     end
 end
 
@@ -172,16 +177,20 @@ local function draw()
         ui.centerText(mon, 4, "BALANCE: " .. balance .. " credits", colors.lime)
         ui.centerText(mon, 6, "YOUR BET", colors.white)
         ui.centerText(mon, 7, tostring(bet), colors.yellow)
-        ui.centerText(mon, h - 4, message, colors.gray)
+        ui.centerText(mon, h - 7, message, colors.gray)
 
-        local defs = {}
+        local chipDefs = {}
         for _, chip in ipairs(CFG.CHIPS) do
-            defs[#defs + 1] = { label = "+" .. chip, id = "chip:" .. chip, bg = colors.blue }
+            chipDefs[#chipDefs + 1] = { label = "+" .. chip, id = "chip:" .. chip, bg = colors.blue }
         end
-        defs[#defs + 1] = { label = "CLEAR", id = "clear", bg = colors.red }
         local dealOK = bet >= CFG.MIN_BET and bet <= balance
-        defs[#defs + 1] = { label = "DEAL", id = "deal", bg = dealOK and colors.green or colors.gray }
-        buttons = rowButtons(defs, h - 2, 3)
+        local controlDefs = {
+            { label = "CLEAR", id = "clear", bg = colors.red },
+            { label = "DEAL",  id = "deal",  bg = dealOK and colors.green or colors.gray },
+        }
+        buttons = {}
+        for _, b in ipairs(rowButtons(chipDefs,    h - 6, 3)) do buttons[#buttons + 1] = b end
+        for _, b in ipairs(rowButtons(controlDefs, h - 2, 3)) do buttons[#buttons + 1] = b end
 
     elseif STATE == "PLAYER" then
         drawTable(w, h, true)
@@ -202,9 +211,12 @@ local function draw()
 
     elseif STATE == "RESULT" then
         drawTable(w, h, false)
-        ui.centerText(mon, h - 5, message, colors.yellow)
-        ui.centerText(mon, h - 4, "Balance: " .. balance .. " credits", colors.lime)
-        buttons = rowButtons({ { label = "PLAY AGAIN", id = "again", bg = colors.green } }, h - 2, 3)
+        ui.centerText(mon, h - 4, message, colors.yellow)
+        ui.centerText(mon, h - 3, "Balance: " .. balance .. " credits", colors.lime)
+        buttons = rowButtons({
+            { label = "PLAY AGAIN", id = "again", bg = colors.green },
+            { label = "QUIT",       id = "quit",  bg = colors.red   },
+        }, h - 2, 3)
     end
 end
 
@@ -338,6 +350,11 @@ local function handleTouch(id)
     elseif STATE == "RESULT" then
         if id == "again" then
             if card.id(CFG.driveSide) then startBetting() else STATE = "INSERT" end
+        elseif id == "quit" then
+            disk.eject(CFG.driveSide)
+            playerID = nil
+            bet, staked, message = 0, 0, ""
+            STATE = "INSERT"
         end
     end
 end
@@ -371,9 +388,8 @@ local function main()
             -- Card pulled: payouts still reach the locked account by id.
             if STATE == "PLAYER" then
                 dealerTurn()        -- auto-stand and resolve
-            elseif STATE == "BET" or STATE == "INSERT" then
-                STATE = "INSERT"
-                message = ""
+            else
+                STATE, message = "INSERT", ""
             end
         end
     end
