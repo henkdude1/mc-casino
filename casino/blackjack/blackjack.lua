@@ -185,8 +185,9 @@ local function draw()
         end
         local dealOK = bet >= CFG.MIN_BET and bet <= balance
         local controlDefs = {
-            { label = "CLEAR", id = "clear", bg = colors.red },
-            { label = "DEAL",  id = "deal",  bg = dealOK and colors.green or colors.gray },
+            { label = "CLEAR",  id = "clear",  bg = colors.red },
+            { label = "DEAL",   id = "deal",   bg = dealOK and colors.green or colors.gray },
+            { label = "EJECT",  id = "eject",  bg = colors.orange },
         }
         buttons = {}
         for _, b in ipairs(rowButtons(chipDefs,    h - 6, 3)) do buttons[#buttons + 1] = b end
@@ -340,6 +341,11 @@ local function handleTouch(id)
             bet, message = 0, ""
         elseif id == "deal" then
             doDeal()
+        elseif id == "eject" then
+            disk.eject(CFG.driveSide)
+            playerID = nil
+            bet, staked, message = 0, 0, ""
+            STATE = "INSERT"
         end
 
     elseif STATE == "PLAYER" then
