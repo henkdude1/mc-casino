@@ -243,7 +243,7 @@ local function resolve()
         payout, outcome = staked, "Push — both blackjack"
     elseif pBJ then
         -- 3:2 natural. Odd bets round the half-credit down (house edge).
-        payout, outcome = staked + math.floor(staked * 3 / 2), "BLACKJACK! 3:2"
+        payout, outcome = staked + math.floor(staked * 6 / 5), "BLACKJACK! 6:5"
     elseif dBJ then
         payout, outcome = 0, "Dealer blackjack — you lose"
     elseif dv > 21 then
@@ -264,6 +264,16 @@ local function resolve()
     STATE = "RESULT"
 end
 
+local function isSoft17(hand)
+    local total, aces = 0, 0
+    for _, c in ipairs(hand) do
+        total = total + c.value
+        if c.rank == "A" then aces = aces + 1 end
+    end
+    while total > 21 and aces > 0 do total = total - 10; aces = aces - 1 end
+    return total == 17 and aces > 0
+end
+
 local function dealerTurn()
     STATE = "DEALER"
     revealHole = true
@@ -271,7 +281,7 @@ local function dealerTurn()
     sleep(0.6)
     -- Dealer only draws if the player is still live (not busted).
     if handValue(playerHand) <= 21 then
-        while handValue(dealerHand) < 17 do
+        while handValue(dealerHand) < 17 or isSoft17(dealerHand) do
             dealerHand[#dealerHand + 1] = draw1()
             draw()
             sleep(0.6)
