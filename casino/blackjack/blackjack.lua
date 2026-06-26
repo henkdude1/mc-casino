@@ -22,7 +22,7 @@ local CFG = {
     monitorScale = 1,             -- 1.0 suits a 3×3 monitor; lower it on larger monitors for more room
     CHIPS        = {1, 5, 25, 100},
     MIN_BET      = 1,
-    MAX_BET      = 500,
+    MAX_BET      = 250,
 }
 
 -- ─── Peripherals ──────────────────────────────────────────────────────────────
