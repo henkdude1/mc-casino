@@ -83,9 +83,11 @@ local STATE       = "INSERT"   -- INSERT | BET | SPINNING | RESULT
 local playerID
 local balance     = 0
 local bets        = {}         -- list of { kind, sel, amount, key }
+local betHistory  = {}         -- stack of { key, amount }, one per chip placed (for UNDO)
 local selectedChip
 local tab         = "NUMBERS"  -- NUMBERS | OUTSIDE (opens on the number grid)
 local message     = ""
+local messageColor = colors.gray  -- status-line colour (red for max-out alerts)
 local lastResult                -- pocket table, for the RESULT screen
 local lastWin     = 0           -- credits won on the last spin
 local lastStaked  = 0           -- credits staked on the last spin
@@ -120,12 +122,38 @@ end
 local function placeBet(kind, sel)
     local amt = selectedChip
     local cap = math.min(balance, CFG.MAX_BET)
-    if totalBet() + amt > cap then message = "Over limit (" .. cap .. ")"; return end
-    local key = kind .. ":" .. tostring(sel)
-    for _, b in ipairs(bets) do
-        if b.key == key then b.amount = b.amount + amt; message = ""; return end
+    if totalBet() + amt > cap then
+        message, messageColor = "MAXED OUT (" .. cap .. ")", colors.red
+        return
     end
-    bets[#bets + 1] = { kind = kind, sel = sel, amount = amt, key = key }
+    local key = kind .. ":" .. tostring(sel)
+    local found
+    for _, b in ipairs(bets) do
+        if b.key == key then found = b; break end
+    end
+    if found then
+        found.amount = found.amount + amt
+    else
+        bets[#bets + 1] = { kind = kind, sel = sel, amount = amt, key = key }
+    end
+    betHistory[#betHistory + 1] = { key = key, amount = amt }
+    message = ""
+end
+
+-- Remove the most recent chip placement (last-in, first-out).
+local function undoBet()
+    local last = table.remove(betHistory)
+    if not last then
+        message, messageColor = "Nothing to undo", colors.red
+        return
+    end
+    for i, b in ipairs(bets) do
+        if b.key == last.key then
+            b.amount = b.amount - last.amount
+            if b.amount <= 0 then table.remove(bets, i) end
+            break
+        end
+    end
     message = ""
 end
 
@@ -322,7 +350,7 @@ local function draw()
     local tb = totalBet()
     local tbText = "BET " .. tb
     ui.text(mon, w - #tbText - 1, 2, tbText, (tb > 0) and colors.orange or colors.gray)
-    ui.centerText(mon, 3, message, colors.gray)
+    ui.centerText(mon, 3, message, messageColor)
 
     -- Chip selector
     local chipDefs = {}
@@ -345,6 +373,7 @@ local function draw()
     local spinOK = tb >= CFG.MIN_BET and tb <= math.min(balance, CFG.MAX_BET)
     for _, b in ipairs(rowButtons({
         { label = "CLEAR", id = "clear", bg = colors.red },
+        { label = "UNDO",  id = "undo",  bg = colors.blue },
         { label = "EJECT", id = "eject", bg = colors.orange, fg = colors.black },
         { label = "SPIN",  id = "spin",  bg = spinOK and colors.green or colors.gray },
     }, h - 2, 3)) do buttons[#buttons + 1] = b end
@@ -431,7 +460,7 @@ local function doSpin()
         message = ""
     end
 
-    bets  = {}
+    bets, betHistory = {}, {}
     STATE = "RESULT"
 end
 
@@ -440,7 +469,7 @@ end
 local function startBetting()
     playerID = card.id(CFG.driveSide)
     if not playerID then STATE = "INSERT"; return end
-    bets, message = {}, ""
+    bets, betHistory, message = {}, {}, ""
     selectedChip = CFG.CHIPS[1]
     tab = "NUMBERS"
     refreshBalance()
@@ -449,12 +478,13 @@ end
 
 local function handleTouch(id)
     if not id then return end
+    messageColor = colors.gray   -- reset to neutral; specific actions may set it red
 
     -- EJECT works from any betting/result screen (bets are only debited at SPIN,
     -- so an un-spun board is simply discarded — no refund needed).
     if id == "eject" then
         card.eject(CFG.driveSide)
-        STATE, message, bets = "INSERT", "", {}
+        STATE, message, bets, betHistory = "INSERT", "", {}, {}
         return
     end
 
@@ -464,7 +494,8 @@ local function handleTouch(id)
             message = ""
         elseif id == "tab:OUTSIDE" then tab = "OUTSIDE"
         elseif id == "tab:NUMBERS" then tab = "NUMBERS"
-        elseif id == "clear" then bets, message = {}, ""
+        elseif id == "clear" then bets, betHistory, message = {}, {}, ""
+        elseif id == "undo" then undoBet()
         elseif id == "spin" then doSpin()
         elseif id:match("^spot:") then
             local rest = id:sub(6)               -- strip "spot:"
