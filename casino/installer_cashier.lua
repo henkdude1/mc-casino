@@ -9,6 +9,7 @@ local files = {
     "lib/bankclient.lua",
     "lib/card.lua",
     "lib/ui.lua",
+    "lib/txlog.lua",
     "cashier.lua",
     "startup.lua",
 }

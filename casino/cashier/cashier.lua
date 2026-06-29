@@ -16,8 +16,10 @@
 local bankc = require("lib.bankclient")
 local card  = require("lib.card")
 local ui    = require("lib.ui")
+local txlog = require("lib.txlog")
 
 local CFG = {
+    cashierLabel = "cashier1",             -- name shown by the bank's `vault` command
     COIN         = "numismatics:cog",
     depositName  = "minecraft:chest_0",    -- chest where players place cogs to deposit
     vaultName    = "sophisticatedbackpacks:backpack_0",   -- internal storage
@@ -62,6 +64,15 @@ local function countCogs(inv)
     return n
 end
 
+-- Append a transaction to the on-disk log and report the new vault total to
+-- the bank (viewable there via the `vault` admin command). Call AFTER the
+-- cogs have actually moved, so countCogs(vault) reflects the new total.
+local function logTxn(kind, cardID, amount)
+    local total = countCogs(vault)
+    txlog.record(kind, cardID, amount, total)
+    bankc.reportVault(CFG.cashierLabel, total)
+end
+
 -- ─── Actions ──────────────────────────────────────────────────────────────────
 
 local function doDeposit(currentID)
@@ -78,6 +89,7 @@ local function doDeposit(currentID)
         end
     end
 
+    logTxn("DEPOSIT", currentID, n)
     return string.format("Deposited %d cogs!  Balance: %d", n, result)
 end
 
@@ -112,9 +124,11 @@ local function doWithdraw(currentID, amount)
     if remaining > 0 then
         -- Payout chest was full; refund whatever didn't fit
         bankc.credit(currentID, remaining)
+        logTxn("WITHDRAW", currentID, amount - remaining)
         return string.format("Payout chest full! Refunded %d credits. Collect cogs and retry.", remaining)
     end
 
+    logTxn("WITHDRAW", currentID, amount)
     return string.format("Paid out %d cogs!", amount)
 end
 
@@ -273,6 +287,7 @@ end
 
 local function main()
     initPeripherals()
+    bankc.reportVault(CFG.cashierLabel, countCogs(vault))   -- seed the bank's vault readout
 
     -- If a card is already present at boot, go straight to the menu.
     if card.id(CFG.driveSide) then enterMenu() else STATE = "INSERT" end

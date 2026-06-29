@@ -22,4 +22,8 @@ function M.balance(id)   return call("balance", id, 0) end
 function M.credit(id, n) return call("credit",  id, n) end
 function M.debit(id, n)  return call("debit",   id, n) end
 
+-- Report a cashier's current vault cog count to the bank (viewable there via
+-- the `vault` admin command). `label` identifies which cashier. Fire-and-check.
+function M.reportVault(label, total) return call("vault", label, total) end
+
 return M

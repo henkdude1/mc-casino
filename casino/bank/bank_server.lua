@@ -3,9 +3,11 @@
 -- balances.db is created automatically and persists across reboots.
 -- Admin commands are available on this computer's own keyboard.
 
-local proto    = require("lib.protocol")
-local DB_PATH  = "balances.db"
-local balances = {}
+local proto      = require("lib.protocol")
+local DB_PATH    = "balances.db"
+local VAULT_PATH = "vaults.db"
+local balances   = {}
+local vaults     = {}   -- label -> { total = cogs, time = epoch ms }
 
 local function persist()
     local f = fs.open(DB_PATH, "w")
@@ -18,6 +20,20 @@ local function load()
         local f = fs.open(DB_PATH, "r")
         local raw = f.readAll(); f.close()
         balances = textutils.unserialize(raw) or {}
+    end
+end
+
+local function persistVaults()
+    local f = fs.open(VAULT_PATH, "w")
+    f.write(textutils.serialize(vaults))
+    f.close()
+end
+
+local function loadVaults()
+    if fs.exists(VAULT_PATH) then
+        local f = fs.open(VAULT_PATH, "r")
+        local raw = f.readAll(); f.close()
+        vaults = textutils.unserialize(raw) or {}
     end
 end
 
@@ -59,6 +75,12 @@ local function serverLoop()
                     log(colors.orange, "[!] ID %s  debit %d refused (has %d)", tostring(id), amt, cur)
                 end
 
+            elseif msg.action == "vault" then
+                vaults[id] = { total = amt, time = os.epoch("local") }
+                persistVaults()
+                reply = { ok=true }
+                log(colors.cyan, "[V] %s vault => %d cogs", tostring(id), amt)
+
             else
                 reply = { ok=false, reason="unknown action" }
             end
@@ -70,7 +92,7 @@ end
 
 -- Admin keyboard loop (runs in parallel with the server).
 local function adminLoop()
-    log(colors.yellow, "Admin: balance <id>  |  set <id> <n>  |  list  |  quit")
+    log(colors.yellow, "Admin: balance <id> | set <id> <n> | list | vault | quit")
     while true do
         io.write("> ")
         local line = io.read()
@@ -100,17 +122,27 @@ local function adminLoop()
             end
             if n == 0 then print("  (no accounts yet)") end
 
+        elseif cmd == "vault" then
+            local n = 0
+            for label, v in pairs(vaults) do
+                local when = os.date("%Y-%m-%d %H:%M:%S", math.floor((v.time or 0) / 1000))
+                print(string.format("  %s: %d cogs  (as of %s)", tostring(label), v.total or 0, when))
+                n = n + 1
+            end
+            if n == 0 then print("  (no vault reports yet)") end
+
         elseif cmd == "quit" then
             print("Shutting down."); break
 
         else
-            print("  Commands: balance <id> | set <id> <n> | list | quit")
+            print("  Commands: balance <id> | set <id> <n> | list | vault | quit")
         end
     end
 end
 
 -- Startup
 load()
+loadVaults()
 local modem = peripheral.find("modem")
 assert(modem, "Bank: no modem attached!")
 rednet.open(peripheral.getName(modem))
