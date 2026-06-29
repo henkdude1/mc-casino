@@ -84,7 +84,7 @@ local playerID
 local balance     = 0
 local bets        = {}         -- list of { kind, sel, amount, key }
 local selectedChip
-local tab         = "OUTSIDE"  -- OUTSIDE | NUMBERS
+local tab         = "NUMBERS"  -- NUMBERS | OUTSIDE (opens on the number grid)
 local message     = ""
 local lastResult                -- pocket table, for the RESULT screen
 local lastWin     = 0           -- credits won on the last spin
@@ -282,7 +282,10 @@ local function draw()
         end
         ui.centerText(mon, 12, "BALANCE: " .. balance, colors.lime)
         ui.centerText(mon, h - 4, message, colors.yellow)
-        buttons = rowButtons({ { label = "BET AGAIN", id = "again", bg = colors.green } }, h - 2, 3)
+        buttons = rowButtons({
+            { label = "BET AGAIN", id = "again", bg = colors.green },
+            { label = "EJECT",     id = "eject", bg = colors.orange, fg = colors.black },
+        }, h - 2, 3)
         return
     end
 
@@ -297,15 +300,15 @@ local function draw()
     -- Chip selector
     local chipDefs = {}
     for _, c in ipairs(CFG.CHIPS) do
-        chipDefs[#chipDefs + 1] = { label = "$" .. c, id = "chip:" .. c,
+        chipDefs[#chipDefs + 1] = { label = tostring(c), id = "chip:" .. c,
                                     bg = (c == selectedChip) and colors.green or colors.blue }
     end
     for _, b in ipairs(rowButtons(chipDefs, 5, 3)) do buttons[#buttons + 1] = b end
 
     -- Tab toggle
     for _, b in ipairs(rowButtons({
-        { label = "OUTSIDE", id = "tab:OUTSIDE", bg = (tab == "OUTSIDE") and colors.lightBlue or colors.gray, fg = colors.black },
         { label = "NUMBERS", id = "tab:NUMBERS", bg = (tab == "NUMBERS") and colors.lightBlue or colors.gray, fg = colors.black },
+        { label = "OUTSIDE", id = "tab:OUTSIDE", bg = (tab == "OUTSIDE") and colors.lightBlue or colors.gray, fg = colors.black },
     }, 9, 2)) do buttons[#buttons + 1] = b end
 
     -- Board
@@ -315,6 +318,7 @@ local function draw()
     local spinOK = tb >= CFG.MIN_BET and tb <= math.min(balance, CFG.MAX_BET)
     for _, b in ipairs(rowButtons({
         { label = "CLEAR", id = "clear", bg = colors.red },
+        { label = "EJECT", id = "eject", bg = colors.orange, fg = colors.black },
         { label = "SPIN",  id = "spin",  bg = spinOK and colors.green or colors.gray },
     }, h - 2, 3)) do buttons[#buttons + 1] = b end
 end
@@ -393,13 +397,21 @@ local function startBetting()
     if not playerID then STATE = "INSERT"; return end
     bets, message = {}, ""
     selectedChip = CFG.CHIPS[1]
-    tab = "OUTSIDE"
+    tab = "NUMBERS"
     refreshBalance()
     STATE = "BET"
 end
 
 local function handleTouch(id)
     if not id then return end
+
+    -- EJECT works from any betting/result screen (bets are only debited at SPIN,
+    -- so an un-spun board is simply discarded — no refund needed).
+    if id == "eject" then
+        card.eject(CFG.driveSide)
+        STATE, message, bets = "INSERT", "", {}
+        return
+    end
 
     if STATE == "BET" then
         if id:match("^chip:") then
