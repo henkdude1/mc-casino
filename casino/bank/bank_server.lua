@@ -92,7 +92,9 @@ end
 
 -- Admin keyboard loop (runs in parallel with the server).
 local function adminLoop()
-    log(colors.yellow, "Admin: balance <id> | set <id> <n> | list | vault | quit")
+    log(colors.yellow, "Admin commands:")
+    log(colors.yellow, "  list | balance <id> | set <id> <n> | del <id>")
+    log(colors.yellow, "  backup | vault | quit")
     while true do
         io.write("> ")
         local line = io.read()
@@ -115,12 +117,37 @@ local function adminLoop()
                 print("  Usage: set <id> <amount>")
             end
 
-        elseif cmd == "list" then
-            local n = 0
-            for id, bal in pairs(balances) do
-                print(string.format("  %s: %d", tostring(id), bal)); n = n + 1
+        elseif cmd == "del" and parts[2] then
+            local id = tonumber(parts[2]) or parts[2]
+            if balances[id] ~= nil then
+                balances[id] = nil; persist()
+                print(string.format("  deleted %s", tostring(id)))
+            else
+                print(string.format("  %s has no account", tostring(id)))
             end
-            if n == 0 then print("  (no accounts yet)") end
+
+        elseif cmd == "backup" then
+            if fs.exists(DB_PATH) then
+                local name = "balances_backup_" .. os.date("%Y%m%d_%H%M%S") .. ".db"
+                fs.copy(DB_PATH, name)
+                print("  Backed up balances to " .. name)
+            else
+                print("  No balances.db to back up yet")
+            end
+
+        elseif cmd == "list" then
+            -- Sort by id and page 10 at a time so 30+ accounts don't scroll off.
+            local ids = {}
+            for id in pairs(balances) do ids[#ids + 1] = id end
+            table.sort(ids, function(a, b) return (tonumber(a) or 0) < (tonumber(b) or 0) end)
+            if #ids == 0 then print("  (no accounts yet)") end
+            for i, id in ipairs(ids) do
+                print(string.format("  %s: %d", tostring(id), balances[id]))
+                if i % 10 == 0 and i < #ids then
+                    io.write(string.format("  -- %d/%d shown, Enter = more, q = stop -- ", i, #ids))
+                    if io.read() == "q" then break end
+                end
+            end
 
         elseif cmd == "vault" then
             local n = 0
@@ -135,7 +162,7 @@ local function adminLoop()
             print("Shutting down."); break
 
         else
-            print("  Commands: balance <id> | set <id> <n> | list | vault | quit")
+            print("  Commands: list | balance <id> | set <id> <n> | del <id> | backup | vault | quit")
         end
     end
 end
