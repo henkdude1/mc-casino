@@ -94,6 +94,8 @@ local buttons     = {}
 local DEBOUNCE_MS = 300
 local lastTouch   = 0
 
+local GRID_Y      = 12          -- top row of the number board (BET screen + spin)
+
 -- ─── Bank helpers ─────────────────────────────────────────────────────────────
 
 local function refreshBalance()
@@ -183,50 +185,75 @@ end
 
 -- ─── Drawing: number grid (NUMBERS tab) ─────────────────────────────────────────
 
--- Draw one pocket cell and register its touch button.
-local function drawCell(x, y, cw, ch, p, out)
-    local bg = select(1, pocketColor(p))
-    ui.fillRect(mon, x, y, cw, ch, bg)
-    mon.setBackgroundColor(bg)
-    mon.setTextColor(colors.white)
-    mon.setCursorPos(x + math.max(0, math.floor((cw - #p.label) / 2)), y)
-    mon.write(p.label)
-    local staked = betOn("number:" .. p.label)
-    if staked > 0 and ch >= 2 then
-        local amt = tostring(staked)
-        mon.setTextColor(colors.yellow)
-        mon.setCursorPos(x + math.max(0, math.floor((cw - #amt) / 2)), y + ch - 1)
-        mon.write(amt)
-    end
-    mon.setBackgroundColor(colors.black)
-    mon.setTextColor(colors.white)
-    out[#out + 1] = { x = x, y = y, w = cw, h = ch, id = "spot:number:" .. p.label }
-end
-
 local function pocketByLabel(label)
     for _, p in ipairs(POCKETS) do if p.label == label then return p end end
 end
 
-local function drawNumberGrid(y0, out)
+-- Compute the rect for every pocket cell on the number board (0, 00, 1..36).
+-- Returns an ordered list of { label, x, y, cw, ch, p }. Shared by the BET-screen
+-- grid and the spin animation, so the ball lands on the exact board players bet on.
+local function gridCells(y0)
     local w = mon.getSize()
     local cols = 12
     local cw = math.max(2, math.floor((w - 2) / cols))
     local ch = 2
     local gw = cw * cols
     local x0 = math.max(1, math.floor((w - gw) / 2) + 1)
+    local cells = {}
 
     -- 0 / 00 row spanning the full grid width.
     local halfW = math.floor(gw / 2)
-    drawCell(x0,          y0, halfW,      ch, pocketByLabel("0"),  out)
-    drawCell(x0 + halfW,  y0, gw - halfW, ch, pocketByLabel("00"), out)
+    cells[#cells + 1] = { label = "0",  x = x0,         y = y0, cw = halfW,      ch = ch, p = pocketByLabel("0")  }
+    cells[#cells + 1] = { label = "00", x = x0 + halfW, y = y0, cw = gw - halfW, ch = ch, p = pocketByLabel("00") }
 
     -- 36 numbers: 12 columns x 3 rows. Top row = 3c, bottom row = 3c-2.
     local gy = y0 + ch + 1
     for c = 1, cols do
         for r = 1, 3 do
             local num = 3 * c - (r - 1)
-            drawCell(x0 + (c - 1) * cw, gy + (r - 1) * ch, cw, ch, pocketByLabel(tostring(num)), out)
+            cells[#cells + 1] = {
+                label = tostring(num), x = x0 + (c - 1) * cw, y = gy + (r - 1) * ch,
+                cw = cw, ch = ch, p = pocketByLabel(tostring(num)),
+            }
         end
+    end
+    return cells
+end
+
+-- Paint a single grid cell. `mode` = "normal" | "ball" | "win".
+-- "normal" also overlays the player's stake on that number (yellow, 2nd row).
+local function paintSpinCell(cell, mode)
+    local bg, fg
+    if mode == "ball" then
+        bg, fg = colors.white, colors.black
+    elseif mode == "win" then
+        bg, fg = colors.yellow, colors.black
+    else
+        bg, fg = select(1, pocketColor(cell.p)), colors.white
+    end
+    ui.fillRect(mon, cell.x, cell.y, cell.cw, cell.ch, bg)
+    mon.setBackgroundColor(bg)
+    mon.setTextColor(fg)
+    mon.setCursorPos(cell.x + math.max(0, math.floor((cell.cw - #cell.label) / 2)), cell.y)
+    mon.write(cell.label)
+    if mode == "normal" and cell.ch >= 2 then
+        local staked = betOn("number:" .. cell.label)
+        if staked > 0 then
+            local amt = tostring(staked)
+            mon.setTextColor(colors.yellow)
+            mon.setCursorPos(cell.x + math.max(0, math.floor((cell.cw - #amt) / 2)), cell.y + cell.ch - 1)
+            mon.write(amt)
+        end
+    end
+    mon.setBackgroundColor(colors.black)
+    mon.setTextColor(colors.white)
+end
+
+-- Draw the full number board and register each cell's touch button (BET screen).
+local function drawNumberGrid(y0, out)
+    for _, cell in ipairs(gridCells(y0)) do
+        paintSpinCell(cell, "normal")
+        out[#out + 1] = { x = cell.x, y = cell.y, w = cell.cw, h = cell.ch, id = "spot:number:" .. cell.label }
     end
 end
 
@@ -312,7 +339,7 @@ local function draw()
     }, 9, 2)) do buttons[#buttons + 1] = b end
 
     -- Board
-    if tab == "OUTSIDE" then drawOutside(12, buttons) else drawNumberGrid(12, buttons) end
+    if tab == "OUTSIDE" then drawOutside(GRID_Y, buttons) else drawNumberGrid(GRID_Y, buttons) end
 
     -- Footer: CLEAR + SPIN
     local spinOK = tb >= CFG.MIN_BET and tb <= math.min(balance, CFG.MAX_BET)
@@ -330,17 +357,11 @@ local function indexOfPocket(p)
     return 1
 end
 
-local function drawSpinFrame(p, big)
-    local w, h = mon.getSize()
-    ui.clear(mon)
-    ui.centerText(mon, 1, "R O U L E T T E", colors.yellow)
-    local bg, name = pocketColor(p)
-    local bw = math.min(w - 4, 14)
-    local bx = math.floor((w - bw) / 2) + 1
-    local by = math.floor(h / 2) - 1
-    ui.fillRect(mon, bx, by, bw, 3, bg)
-    ui.centerText(mon, by + 1, p.label .. (big and ("  " .. name) or ""), colors.white, bg)
-    ui.centerText(mon, h - 2, big and "* WINNER *" or "* SPINNING *", colors.gray)
+-- Repaint the banner row (above the grid) with the current/winning pocket.
+local function spinBanner(text, color)
+    local w = mon.getSize()
+    ui.fillRect(mon, 1, 3, w, 1, colors.black)
+    ui.centerText(mon, 3, text, color)
 end
 
 local function doSpin()
@@ -360,18 +381,44 @@ local function doSpin()
     local n      = #POCKETS
     local target = indexOfPocket(result)
     local start  = math.random(n)
-    local steps  = n * 3 + ((target - start) % n)   -- lands exactly on `target`
+    local steps  = n * 2 + ((target - start) % n)   -- ~2 trips, lands exactly on `target`
 
-    local pos = start
+    -- Draw the board once; the ball animates by repainting only changed cells.
+    local cells = gridCells(GRID_Y)
+    local cellByLabel = {}
+    for _, c in ipairs(cells) do cellByLabel[c.label] = c end
+
+    ui.clear(mon)
+    ui.centerText(mon, 1, "R O U L E T T E", colors.yellow)
+    for _, c in ipairs(cells) do paintSpinCell(c, "normal") end
+
+    -- Ball hops in wheel order, easing out over the final stretch.
+    local pos, prevCell = start, nil
     for i = 1, steps do
         pos = (pos % n) + 1
-        drawSpinFrame(POCKETS[pos], false)
-        -- ease out over the final stretch so the ball "settles"
+        local p = POCKETS[pos]
+        if prevCell then paintSpinCell(prevCell, "normal") end
+        local cell = cellByLabel[p.label]
+        paintSpinCell(cell, "ball")
+        prevCell = cell
+        spinBanner("BALL  " .. p.label, (select(1, pocketColor(p))))
+
         local remaining = steps - i
         local delay = 0.04
         if remaining < 14 then delay = 0.04 + (14 - remaining) * 0.02 end
         sleep(delay)
     end
+
+    -- Flash the winning cell.
+    local winCell = cellByLabel[result.label]
+    local _, name = pocketColor(result)
+    for f = 1, 6 do
+        paintSpinCell(winCell, (f % 2 == 1) and "win" or "ball")
+        spinBanner("WINNER  " .. result.label .. "  " .. name, colors.yellow)
+        sleep(0.18)
+    end
+    paintSpinCell(winCell, "win")
+    sleep(0.8)
 
     -- Resolve every bet against the winning pocket.
     lastResult = result
@@ -386,8 +433,6 @@ local function doSpin()
 
     bets  = {}
     STATE = "RESULT"
-    drawSpinFrame(result, true)
-    sleep(1.2)
 end
 
 -- ─── Game flow ──────────────────────────────────────────────────────────────────
