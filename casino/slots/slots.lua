@@ -27,7 +27,7 @@ local CFG = {
     MIN_BET      = 1,
     MAX_BET      = 500,
     GAMBLE_MAX   = 4,             -- max consecutive double-or-nothing rounds per win
-    AUTO_DELAY   = 1.0,           -- pause (s) between autospins; STOP stays tappable in this gap
+    AUTO_DELAY   = 3.0,           -- pause (s) between autospins; STOP stays tappable in this gap
 }
 
 -- ─── Symbols ──────────────────────────────────────────────────────────────────
@@ -35,12 +35,18 @@ local CFG = {
 -- mult3  = payout multiplier for three-of-a-kind
 
 local SYMBOLS = {
-    { name="DIAMOND", char="D", color=colors.lightBlue, weight=1,  mult3=100 },
-    { name="SEVEN",   char="7", color=colors.red,       weight=2,  mult3=50  },
-    { name="BELL",    char="*", color=colors.yellow,    weight=4,  mult3=15  },
-    { name="CHERRY",  char="C", color=colors.magenta,   weight=7,  mult3=8   },
-    { name="COIN",    char="$", color=colors.orange,    weight=9,  mult3=4   },
-    { name="BAR",     char="=", color=colors.white,     weight=12, mult3=3   },
+    { name="DIAMOND", char="D", color=colors.lightBlue, weight=1,  mult3=100,
+      icon={ "..X..", ".XXX.", "..X.." } },
+    { name="SEVEN",   char="7", color=colors.red,       weight=2,  mult3=50,
+      icon={ "XXXXX", "....X", "..XXX" } },
+    { name="BELL",    char="*", color=colors.yellow,    weight=4,  mult3=15,
+      icon={ "..X..", ".XXX.", "XXXXX" } },
+    { name="CHERRY",  char="C", color=colors.magenta,   weight=7,  mult3=8,
+      icon={ "X.X..", ".gg..", "..g.." }, iconAccents={ g=colors.green } },
+    { name="COIN",    char="$", color=colors.orange,    weight=9,  mult3=4,
+      icon={ ".XXX.", "X...X", ".XXX." } },
+    { name="BAR",     char="=", color=colors.white,     weight=12, mult3=3,
+      icon={ "XXXXX", ".....", "XXXXX" } },
 }
 
 -- Build weighted pool once at load time.
@@ -121,7 +127,7 @@ local function getPayout(r1, r2, r3)
         if r.name == "CHERRY" then cherries = cherries + 1 end
     end
     if sevens == 2   then return 5 end
-    if cherries == 2 then return 3 end
+    if cherries == 2 then return 2 end
     if cherries == 1 then return 1 end
     return 0
 end
@@ -162,15 +168,41 @@ local function gridLayout(w, h)
 end
 
 -- Draw one symbol cell. `hot` (the winning payline flash) paints it yellow.
+-- When the cell is large enough (cw>=5, ch>=3) the symbol's 5x3 block-art icon
+-- is rendered pixel-by-pixel; otherwise falls back to a single centred char.
 local function drawCell(rect, sym, hot)
-    local boxColor = hot and colors.yellow or sym.color
-    ui.fillRect(mon, rect.x, rect.y, rect.cw, rect.ch, boxColor)
-    mon.setBackgroundColor(boxColor)
-    mon.setTextColor(colors.black)
-    mon.setCursorPos(rect.x + math.floor((rect.cw - 1) / 2), rect.y + math.floor(rect.ch / 2))
-    mon.write(sym.char)
-    mon.setBackgroundColor(colors.black)
-    mon.setTextColor(colors.white)
+    local bg = hot and colors.yellow or colors.black
+    ui.fillRect(mon, rect.x, rect.y, rect.cw, rect.ch, bg)
+    if rect.ch >= 3 and rect.cw >= 5 and sym.icon then
+        local ix = rect.x + math.floor((rect.cw - 5) / 2)
+        local iy = rect.y + math.floor((rect.ch - 3) / 2)
+        for row = 1, 3 do
+            local rowStr = sym.icon[row]
+            for col = 1, 5 do
+                local px = rowStr:sub(col, col)
+                if px ~= "." then
+                    local pixColor
+                    if hot then
+                        pixColor = colors.black
+                    elseif px == "X" then
+                        pixColor = sym.color
+                    elseif sym.iconAccents and sym.iconAccents[px] then
+                        pixColor = sym.iconAccents[px]
+                    else
+                        pixColor = sym.color
+                    end
+                    ui.fillRect(mon, ix + col - 1, iy + row - 1, 1, 1, pixColor)
+                end
+            end
+        end
+    else
+        mon.setBackgroundColor(hot and colors.yellow or sym.color)
+        mon.setTextColor(colors.black)
+        mon.setCursorPos(rect.x + math.floor((rect.cw - 1) / 2), rect.y + math.floor(rect.ch / 2))
+        mon.write(sym.char)
+        mon.setBackgroundColor(colors.black)
+        mon.setTextColor(colors.white)
+    end
 end
 
 -- Draw the whole 3x3 grid from `windows` (windows[col] = {top, mid, bot}).
@@ -219,7 +251,7 @@ local function rowButtons(defs, y, h)
 end
 
 local function drawPaytableHint(h)
-    ui.centerText(mon, h - 5, "3x: D100 7:50 *:15 C:8 $:4 =:3   77:5  CC:3  C:1", colors.gray)
+    ui.centerText(mon, h - 5, "3x: D100 7:50 *:15 C:8 $:4 =:3   77:5  CC:2  C:1", colors.gray)
 end
 
 local function appendRow(defs, y, h)
