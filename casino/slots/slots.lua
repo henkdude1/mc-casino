@@ -82,7 +82,9 @@ local bet          = 0
 local staked       = 0
 local message      = ""
 local messageColor = colors.gray
-local reels        = { BAR, BAR, BAR }   -- current display (default BAR BAR BAR)
+local reels        = { BAR, BAR, BAR }   -- center-row symbols (the payline — scored by getPayout)
+-- Each reel shows 3 stacked symbols {top, mid, bot}; `mid` is the payline = reels[r].
+local reelWindows  = { { BAR, BAR, BAR }, { BAR, BAR, BAR }, { BAR, BAR, BAR } }
 local lastMult     = 0          -- payout multiplier of the last spin (0 = loss)
 local currentWin   = 0          -- credits riding (spin payout, grows on a gamble win)
 local gambleCount  = 0          -- consecutive gambles taken on the current win
@@ -121,65 +123,74 @@ local function getPayout(r1, r2, r3)
     return 0
 end
 
--- ─── Drawing ──────────────────────────────────────────────────────────────────
+-- ─── Drawing: 3x3 reel grid ─────────────────────────────────────────────────
+-- Three reels across, three symbol rows down. The middle row is the payline.
 
-local REEL_W, REEL_H = 9, 5   -- outer reel box size in chars
-local SYM_W,  SYM_H  = 5, 3   -- colored symbol box inside each reel
+local GRID_TOP    = 4   -- first row available below the title/balance header
+local GRID_BOTTOM = 7   -- rows reserved at the bottom for paytable + message + buttons
 
--- Where the three reels sit for the current monitor size.
--- Returns { x1, x2, x3 }, reelY.
-local function reelLayout(w, h)
-    local gap    = 2
-    local totalW = REEL_W * 3 + gap * 2
-    local startX = math.max(1, math.floor((w - totalW) / 2) + 1)
-    -- Center reels vertically between the header and the bottom 5 reserved rows.
-    local reelY = math.max(4, math.min(math.floor((h - REEL_H) / 2), h - REEL_H - 5))
-    return { startX, startX + REEL_W + gap, startX + REEL_W * 2 + gap * 2 }, reelY
+-- Compute cell rects for the 3x3 grid for the current monitor size. Adaptive so
+-- it fits a small monitor (cells clamp to 1 tall). Returns:
+--   cells  = cells[col][row] = { x, y, cw, ch }   (col,row = 1..3)
+--   midY   = top row of the centre (payline) cells
+--   xLeft, xRight = x just outside the grid (for the > < markers)
+local function gridLayout(w, h)
+    local gap    = 1
+    local cw     = math.min(11, math.floor((w - 4 - gap * 2) / 3))
+    cw           = math.max(3, cw)
+    local gridW  = cw * 3 + gap * 2
+    local x0     = math.max(1, math.floor((w - gridW) / 2) + 1)
+
+    local availH = h - GRID_TOP - GRID_BOTTOM + 1
+    local ch     = math.max(1, math.floor(availH / 3))
+    local gridH  = ch * 3
+    local y0     = GRID_TOP + math.max(0, math.floor((availH - gridH) / 2))
+
+    local cells = {}
+    for c = 1, 3 do
+        cells[c] = {}
+        local cx = x0 + (c - 1) * (cw + gap)
+        for r = 1, 3 do
+            cells[c][r] = { x = cx, y = y0 + (r - 1) * ch, cw = cw, ch = ch }
+        end
+    end
+    local midY = y0 + ch + math.floor(ch / 2)   -- char row of the centre cell
+    return cells, midY, x0 - 1, x0 + gridW
 end
 
--- Draw one reel box with its symbol centered. `bg` overrides the box color (for the win flash).
-local function drawReel(x, y, sym, bg)
-    local boxColor = bg or colors.gray
-    local symColor = bg or sym.color
-    ui.fillRect(mon, x, y, REEL_W, REEL_H, boxColor)
-    local sx = x + math.floor((REEL_W - SYM_W) / 2)
-    local sy = y + math.floor((REEL_H - SYM_H) / 2)
-    ui.fillRect(mon, sx, sy, SYM_W, SYM_H, symColor)
-    mon.setBackgroundColor(symColor)
+-- Draw one symbol cell. `hot` (the winning payline flash) paints it yellow.
+local function drawCell(rect, sym, hot)
+    local boxColor = hot and colors.yellow or sym.color
+    ui.fillRect(mon, rect.x, rect.y, rect.cw, rect.ch, boxColor)
+    mon.setBackgroundColor(boxColor)
     mon.setTextColor(colors.black)
-    mon.setCursorPos(sx + math.floor(SYM_W / 2), sy + math.floor(SYM_H / 2))
+    mon.setCursorPos(rect.x + math.floor((rect.cw - 1) / 2), rect.y + math.floor(rect.ch / 2))
     mon.write(sym.char)
     mon.setBackgroundColor(colors.black)
     mon.setTextColor(colors.white)
 end
 
--- The active payline runs through the middle row; mark it with > <.
-local function drawPayline(xs, reelY, win)
-    local midY  = reelY + math.floor(REEL_H / 2)
-    local color = win and colors.yellow or colors.gray
-    ui.text(mon, math.max(1, xs[1] - 2), midY, ">", color)
-    ui.text(mon, xs[3] + REEL_W + 1,     midY, "<", color)
-end
-
-local function drawAllReels(w, h, r1, r2, r3, win)
-    local xs, reelY = reelLayout(w, h)
-    drawReel(xs[1], reelY, r1)
-    drawReel(xs[2], reelY, r2)
-    drawReel(xs[3], reelY, r3)
-    drawPayline(xs, reelY, win)
-end
-
--- Flash the winning reels yellow a few times (more, plus a banner, for a jackpot).
-local function flashWin(rs, mult)
-    local w, h      = mon.getSize()
-    local xs, reelY = reelLayout(w, h)
-    local cycles    = (mult >= 50) and 10 or 6
-    for f = 1, cycles do
-        local hot = (f % 2 == 1)
-        for i = 1, 3 do
-            drawReel(xs[i], reelY, rs[i], hot and colors.yellow or nil)
+-- Draw the whole 3x3 grid from `windows` (windows[col] = {top, mid, bot}).
+-- When `win`, the centre (payline) row and its > < markers turn yellow.
+local function drawGrid(w, h, windows, win)
+    local cells, midY, xLeft, xRight = gridLayout(w, h)
+    for c = 1, 3 do
+        for r = 1, 3 do
+            drawCell(cells[c][r], windows[c][r], win and r == 2)
         end
-        drawPayline(xs, reelY, true)
+    end
+    local mc = win and colors.yellow or colors.gray
+    ui.text(mon, math.max(1, xLeft), midY, ">", mc)
+    ui.text(mon, xRight,             midY, "<", mc)
+end
+
+-- Flash the winning payline (centre row) yellow a few times (more, plus a banner,
+-- for a jackpot). Top/bottom rows stay static.
+local function flashWin(windows, mult)
+    local w, h   = mon.getSize()
+    local cycles = (mult >= 50) and 10 or 6
+    for f = 1, cycles do
+        drawGrid(w, h, windows, f % 2 == 1)
         if mult >= 50 then
             ui.centerText(mon, h - 4, "*  *  *   J A C K P O T   *  *  *", colors.yellow)
         else
@@ -226,7 +237,7 @@ local function draw()
     elseif STATE == "BET" then
         ui.centerText(mon, 1, "S  L  O  T  S", colors.yellow)
         ui.centerText(mon, 3, "BALANCE: " .. balance .. "  BET: " .. bet, colors.lime)
-        drawAllReels(w, h, reels[1], reels[2], reels[3])
+        drawGrid(w, h, reelWindows)
         drawPaytableHint(h)
         ui.centerText(mon, h - 4, message, messageColor)
 
@@ -243,7 +254,7 @@ local function draw()
     elseif STATE == "RESULT" then
         ui.centerText(mon, 1, "S  L  O  T  S", colors.yellow)
         ui.centerText(mon, 3, "BALANCE: " .. balance, colors.lime)
-        drawAllReels(w, h, reels[1], reels[2], reels[3], lastMult > 0)
+        drawGrid(w, h, reelWindows, lastMult > 0)
         local net = currentWin - staked
         if lastMult > 0 then
             ui.centerText(mon, h - 6, message, messageColor)
@@ -313,27 +324,44 @@ local function doSpin()
     -- Determine results now (fair — not influenced by animation length).
     local finalReels = { randSym(), randSym(), randSym() }
 
-    -- Animate: reels stop sequentially at frames 12, 19, 26 out of 28.
-    local w, h = mon.getSize()
-    local stopAt = { 12, 19, 26 }
-    local display = { randSym(), randSym(), randSym() }
+    -- Build a scroll strip per reel. Each reel rolls one symbol per frame; the
+    -- visible window is strip[pos..pos+2] with strip[pos+1] as the centre cell.
+    -- Forcing strip[stopFrame+1] = finalReels[r] lands the payline on the result
+    -- exactly when that reel stops.
+    local w, h   = mon.getSize()
+    local stopAt = { 12, 19, 26 }   -- reels stop left-to-right
+    local FRAMES = stopAt[3]
+    local strips = {}
+    for r = 1, 3 do
+        local s = {}
+        for i = 1, stopAt[r] + 2 do s[i] = randSym() end
+        s[stopAt[r] + 1] = finalReels[r]
+        strips[r] = s
+    end
 
-    for frame = 1, 28 do
+    local function windowAt(frame)
+        local win = {}
         for r = 1, 3 do
-            if frame >= stopAt[r] then
-                display[r] = finalReels[r]
-            else
-                display[r] = randSym()
-            end
+            local pos = math.min(frame, stopAt[r])
+            win[r] = { strips[r][pos], strips[r][pos + 1], strips[r][pos + 2] }
         end
+        return win
+    end
+
+    for frame = 1, FRAMES do
         ui.clear(mon)
         ui.centerText(mon, 1, "S  L  O  T  S", colors.yellow)
         ui.centerText(mon, 3, "BALANCE: " .. balance .. "  BET: " .. staked, colors.lime)
-        drawAllReels(w, h, display[1], display[2], display[3])
+        drawGrid(w, h, windowAt(frame))
         ui.centerText(mon, h - 4, "* SPINNING *", colors.gray)
-        sleep(0.07)
+        -- Ease out: slow down over the final stretch so the reels visibly settle.
+        local remaining = FRAMES - frame
+        local delay = 0.05
+        if remaining < 10 then delay = 0.05 + (10 - remaining) * 0.015 end
+        sleep(delay)
     end
 
+    reelWindows = windowAt(FRAMES)
     reels = finalReels
 
     -- Resolve
@@ -346,7 +374,7 @@ local function doSpin()
         if pok then balance = pres end
         currentWin  = payout
         gambleCount = 0
-        flashWin(reels, mult)
+        flashWin(reelWindows, mult)
         if mult >= 50 then
             message, messageColor = "JACKPOT!  x" .. mult .. "  +" .. payout, colors.yellow
         else
