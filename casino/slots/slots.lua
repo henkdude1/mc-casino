@@ -27,6 +27,7 @@ local CFG = {
     MIN_BET      = 1,
     MAX_BET      = 500,
     GAMBLE_MAX   = 4,             -- max consecutive double-or-nothing rounds per win
+    AUTO_DELAY   = 1.0,           -- pause (s) between autospins; STOP stays tappable in this gap
 }
 
 -- ─── Symbols ──────────────────────────────────────────────────────────────────
@@ -88,6 +89,8 @@ local reelWindows  = { { BAR, BAR, BAR }, { BAR, BAR, BAR }, { BAR, BAR, BAR } }
 local lastMult     = 0          -- payout multiplier of the last spin (0 = loss)
 local currentWin   = 0          -- credits riding (spin payout, grows on a gamble win)
 local gambleCount  = 0          -- consecutive gambles taken on the current win
+local autoSpin     = false      -- autospin toggle (re-bets `staked` until stopped)
+local autoTimer    = nil        -- os.startTimer id for the next autospin
 local buttons      = {}
 
 local DEBOUNCE_MS = 300
@@ -255,13 +258,25 @@ local function draw()
         ui.centerText(mon, 1, "S  L  O  T  S", colors.yellow)
         ui.centerText(mon, 3, "BALANCE: " .. balance, colors.lime)
         drawGrid(w, h, reelWindows, lastMult > 0)
-        local net = currentWin - staked
-        if lastMult > 0 then
+        local net      = currentWin - staked
+        local canRepeat = staked >= CFG.MIN_BET and staked <= balance
+        local repeatBg  = canRepeat and colors.green or colors.gray
+        local autoBg    = canRepeat and colors.cyan  or colors.gray
+
+        if autoSpin then
+            ui.centerText(mon, h - 6, message ~= "" and message or "Autospin running...", messageColor)
+            ui.centerText(mon, h - 5, "Staked " .. staked .. "   Bal " .. balance, colors.gray)
+            buttons = rowButtons({
+                { label="STOP AUTOSPIN", id="stop", bg=colors.red },
+            }, h - 2, 3)
+        elseif lastMult > 0 then
             ui.centerText(mon, h - 6, message, messageColor)
             ui.centerText(mon, h - 5,
                 "Staked " .. staked .. "   Net " .. (net >= 0 and "+" or "") .. net, colors.lime)
             buttons = rowButtons({
                 { label="GAMBLE",  id="gamble",  bg=colors.purple },
+                { label="RESPIN",  id="respin",  bg=repeatBg },
+                { label="AUTO",    id="auto",    bg=autoBg, fg=colors.black },
                 { label="COLLECT", id="collect", bg=colors.green  },
                 { label="EJECT",   id="eject",   bg=colors.orange, fg=colors.black },
             }, h - 2, 3)
@@ -269,8 +284,10 @@ local function draw()
             ui.centerText(mon, h - 6, "No win this spin", colors.red)
             ui.centerText(mon, h - 5, "Staked " .. staked .. "   Net " .. net, colors.red)
             buttons = rowButtons({
-                { label="SPIN AGAIN", id="again", bg=colors.green },
-                { label="EJECT",      id="eject", bg=colors.orange, fg=colors.black },
+                { label="RESPIN",  id="respin", bg=repeatBg },
+                { label="AUTO",    id="auto",   bg=autoBg, fg=colors.black },
+                { label="NEW BET", id="newbet", bg=colors.blue },
+                { label="EJECT",   id="eject",  bg=colors.orange, fg=colors.black },
             }, h - 2, 3)
         end
 
@@ -434,9 +451,18 @@ local function handleTouch(id)
     if not id then return end
     messageColor = colors.gray   -- reset to neutral; specific actions may set it red
 
+    -- STOP autospin (works from any screen). Nil-ing autoTimer makes any queued
+    -- timer event a no-op via the `ev[2] == autoTimer` guard in the main loop.
+    if id == "stop" then
+        autoSpin, autoTimer = false, nil
+        message, messageColor = "Autospin stopped", colors.gray
+        return
+    end
+
     -- EJECT works from any betting/result/gamble screen. Any pending win is
     -- already in the bank, so there is nothing to refund.
     if id == "eject" then
+        autoSpin, autoTimer = false, nil
         card.eject(CFG.driveSide)
         playerID = nil
         bet, staked, currentWin, lastMult, gambleCount = 0, 0, 0, 0, 0
@@ -461,7 +487,25 @@ local function handleTouch(id)
         end
 
     elseif STATE == "RESULT" then
-        if id == "again" then
+        if id == "respin" then
+            if not card.id(CFG.driveSide) then STATE = "INSERT"
+            elseif staked >= CFG.MIN_BET and staked <= balance then
+                bet = staked
+                doSpin()
+            else
+                message, messageColor = "Need " .. staked .. " to repeat", colors.red
+            end
+        elseif id == "auto" then
+            if not card.id(CFG.driveSide) then STATE = "INSERT"
+            elseif staked >= CFG.MIN_BET and staked <= balance then
+                autoSpin = true
+                bet = staked
+                doSpin()
+                autoTimer = os.startTimer(CFG.AUTO_DELAY)
+            else
+                message, messageColor = "Need " .. staked .. " to autospin", colors.red
+            end
+        elseif id == "newbet" then
             if card.id(CFG.driveSide) then toBet() else STATE = "INSERT" end
         elseif id == "collect" then
             if card.id(CFG.driveSide) then
@@ -510,6 +554,21 @@ local function main()
                 handleTouch(ui.hit(buttons, x, y))
             end
 
+        elseif name == "timer" then
+            -- Autospin heartbeat: fire the next spin if still affordable.
+            if autoSpin and ev[2] == autoTimer then
+                if not card.id(CFG.driveSide) then
+                    autoSpin, autoTimer, STATE, message = false, nil, "INSERT", ""
+                elseif staked < CFG.MIN_BET or staked > balance then
+                    autoSpin, autoTimer = false, nil
+                    message, messageColor = "Autospin stopped — not enough credits", colors.red
+                else
+                    bet = staked
+                    doSpin()
+                    autoTimer = os.startTimer(CFG.AUTO_DELAY)
+                end
+            end
+
         elseif name == "disk" then
             if STATE == "INSERT" then startBetting() end
 
@@ -517,6 +576,7 @@ local function main()
             -- During SPINNING the bet is already committed; the spin finishes
             -- and pays out to the locked playerID. All other states return to INSERT.
             if STATE ~= "SPINNING" then
+                autoSpin, autoTimer = false, nil
                 STATE   = "INSERT"
                 message = ""
             end
