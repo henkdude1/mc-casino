@@ -36,17 +36,24 @@ local CFG = {
 
 local SYMBOLS = {
     { name="DIAMOND", char="D", color=colors.lightBlue, weight=1,  mult3=100,
-      icon={ "..X..", ".XXX.", "..X.." } },
+      icon    = { "..X..", ".XXX.", "..X.." },
+      iconBig = { "...X...", "..XXX..", ".XXXXX.", "..XXX..", "...X..." } },
     { name="SEVEN",   char="7", color=colors.red,       weight=2,  mult3=50,
-      icon={ "XXXXX", "....X", "..XXX" } },
+      icon    = { "XXXXX", "...X.", "..X.." },
+      iconBig = { "XXXXXXX", ".....X.", "....X..", "...X...", "..X...." } },
     { name="BELL",    char="*", color=colors.yellow,    weight=4,  mult3=15,
-      icon={ "..X..", ".XXX.", "XXXXX" } },
-    { name="CHERRY",  char="C", color=colors.magenta,   weight=7,  mult3=8,
-      icon={ "X.X..", ".gg..", "..g.." }, iconAccents={ g=colors.green } },
+      icon    = { ".XXX.", "XXXXX", "..X.." },
+      iconBig = { "...X...", "..XXX..", ".XXXXX.", "XXXXXXX", "...X..." } },
+    { name="CHERRY",  char="C", color=colors.magenta,   weight=6,  mult3=8,
+      icon    = { "..g..", ".X.X.", "XXXXX" },
+      iconBig = { "...gg..", "..g.g..", ".X...X.", "XXX.XXX", ".XX.XX." },
+      iconAccents = { g=colors.green } },
     { name="COIN",    char="$", color=colors.orange,    weight=9,  mult3=4,
-      icon={ ".XXX.", "X...X", ".XXX." } },
+      icon    = { ".XXX.", "X...X", ".XXX." },
+      iconBig = { ".XXXXX.", "XXXXXXX", "XXXXXXX", "XXXXXXX", ".XXXXX." } },
     { name="BAR",     char="=", color=colors.white,     weight=12, mult3=3,
-      icon={ "XXXXX", ".....", "XXXXX" } },
+      icon    = { "XXXXX", ".....", "XXXXX" },
+      iconBig = { "XXXXXXX", ".......", "XXXXXXX", ".......", "XXXXXXX" } },
 }
 
 -- Build weighted pool once at load time.
@@ -167,34 +174,40 @@ local function gridLayout(w, h)
     return cells, midY, x0 - 1, x0 + gridW
 end
 
--- Draw one symbol cell. `hot` (the winning payline flash) paints it yellow.
--- When the cell is large enough (cw>=5, ch>=3) the symbol's 5x3 block-art icon
--- is rendered pixel-by-pixel; otherwise falls back to a single centred char.
-local function drawCell(rect, sym, hot)
-    local bg = hot and colors.yellow or colors.black
-    ui.fillRect(mon, rect.x, rect.y, rect.cw, rect.ch, bg)
-    if rect.ch >= 3 and rect.cw >= 5 and sym.icon then
-        local ix = rect.x + math.floor((rect.cw - 5) / 2)
-        local iy = rect.y + math.floor((rect.ch - 3) / 2)
-        for row = 1, 3 do
-            local rowStr = sym.icon[row]
-            for col = 1, 5 do
-                local px = rowStr:sub(col, col)
-                if px ~= "." then
-                    local pixColor
-                    if hot then
-                        pixColor = colors.black
-                    elseif px == "X" then
-                        pixColor = sym.color
-                    elseif sym.iconAccents and sym.iconAccents[px] then
-                        pixColor = sym.iconAccents[px]
-                    else
-                        pixColor = sym.color
-                    end
-                    ui.fillRect(mon, ix + col - 1, iy + row - 1, 1, 1, pixColor)
+-- Paint a pw×ph block-art pattern centred in `rect`. Each non-"." pixel becomes
+-- a 1-char fillRect. On a win flash (`hot`) every pixel is drawn black (over the
+-- yellow cell backdrop); otherwise X = symbol colour and lowercase letters map
+-- through sym.iconAccents (e.g. cherry stem g = green).
+local function drawPattern(rect, pattern, pw, ph, sym, hot)
+    local ix = rect.x + math.floor((rect.cw - pw) / 2)
+    local iy = rect.y + math.floor((rect.ch - ph) / 2)
+    for row = 1, ph do
+        local rowStr = pattern[row]
+        for col = 1, pw do
+            local px = rowStr:sub(col, col)
+            if px ~= "." then
+                local pixColor
+                if hot then
+                    pixColor = colors.black
+                elseif px ~= "X" and sym.iconAccents and sym.iconAccents[px] then
+                    pixColor = sym.iconAccents[px]
+                else
+                    pixColor = sym.color
                 end
+                ui.fillRect(mon, ix + col - 1, iy + row - 1, 1, 1, pixColor)
             end
         end
+    end
+end
+
+-- Draw one symbol cell. `hot` (the winning payline flash) paints it yellow.
+-- Picks the largest icon that fits: 7x5 big icon, then 5x3, then a centred char.
+local function drawCell(rect, sym, hot)
+    ui.fillRect(mon, rect.x, rect.y, rect.cw, rect.ch, hot and colors.yellow or colors.black)
+    if rect.cw >= 7 and rect.ch >= 5 and sym.iconBig then
+        drawPattern(rect, sym.iconBig, 7, 5, sym, hot)
+    elseif rect.cw >= 5 and rect.ch >= 3 and sym.icon then
+        drawPattern(rect, sym.icon, 5, 3, sym, hot)
     else
         mon.setBackgroundColor(hot and colors.yellow or sym.color)
         mon.setTextColor(colors.black)
