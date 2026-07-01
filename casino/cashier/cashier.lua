@@ -84,10 +84,15 @@ local function doDeposit(currentID)
     local ok, result = bankc.credit(currentID, n)
     if not ok then return "Bank error: " .. tostring(result) end
 
-    -- Sweep cogs into the vault so they are never counted twice
+    -- Sweep exactly n cogs into the vault. Cap at n so cogs that flow in AFTER the
+    -- count (chute still feeding during the bank round-trip) stay in the chest and
+    -- are credited on the next poll instead of being swept in uncredited.
+    local remaining = n
     for slot, item in pairs(deposit.list()) do
+        if remaining <= 0 then break end
         if item.name == CFG.COIN then
-            deposit.pushItems(CFG.vaultName, slot, item.count)
+            local moved = deposit.pushItems(CFG.vaultName, slot, math.min(remaining, item.count))
+            remaining = remaining - moved
         end
     end
 
