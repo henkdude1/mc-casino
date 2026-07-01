@@ -21,7 +21,7 @@ local ui    = require("lib.ui")
 
 local CFG = {
     monitorName  = "monitor_1",   -- exact monitor peripheral name; "" = auto-find any monitor
-    driveSide    = "left",        -- side the disk drive is attached to
+    driveSide    = "top",         -- side the disk drive is attached to
     monitorScale = 0.5,           -- 4x3 monitor: 0.5 gives enough cells for the number grid; tune to taste
     CHIPS        = {1, 5, 25, 100},
     MIN_BET      = 1,

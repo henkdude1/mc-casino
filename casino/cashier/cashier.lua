@@ -25,7 +25,7 @@ local CFG = {
     vaultName    = "sophisticatedbackpacks:backpack_0",   -- internal storage
     payoutName   = "minecraft:chest_1",    -- payout chest (funnel/pipe this to the player)
     monitorName  = "",                     -- exact monitor name; "" or nil = auto-find
-    driveSide    = "left",                 -- side the disk drive is attached to
+    driveSide    = "top",                  -- side the disk drive is attached to
     monitorScale = 1,                      -- monitor text scale (0.5 – 5)
     STEPS        = {1, 10, 100},           -- withdraw increment buttons
     POLL_INTERVAL = 1,                     -- seconds between deposit-chest auto-sweeps

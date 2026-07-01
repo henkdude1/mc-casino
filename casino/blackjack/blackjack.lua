@@ -18,7 +18,7 @@ local ui    = require("lib.ui")
 
 local CFG = {
     monitorName  = "monitor_1",   -- exact monitor peripheral name; "" or nil = auto-find any monitor
-    driveSide    = "left",        -- side the disk drive is attached to
+    driveSide    = "top",         -- side the disk drive is attached to
     monitorScale = 1,             -- 1.0 suits a 3×3 monitor; lower it on larger monitors for more room
     CHIPS        = {1, 5, 25, 100},
     MIN_BET      = 1,

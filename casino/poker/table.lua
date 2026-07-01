@@ -21,7 +21,7 @@ local pp     = require("lib.pokerproto")
 
 local CFG = {
     monitorName  = "",        -- exact monitor name; "" = auto-find
-    driveSide    = "left",    -- disk drive side for buy-in
+    driveSide    = "top",     -- disk drive side for buy-in
     monitorScale = 0.5,       -- 0.5 suits a larger board monitor
     SEATS        = 6,
     SMALL_BLIND  = 5,
