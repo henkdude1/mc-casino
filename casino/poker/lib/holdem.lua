@@ -184,6 +184,30 @@ function M.buildPots(contrib, folded)
     return pots
 end
 
+-- ─── Rake ────────────────────────────────────────────────────────────────────
+-- Standard card-room pot rake: a percentage of the total pot, capped, with
+-- "no flop no drop" — hands that end pre-flop are rake-free.
+
+function M.computeRake(totalPot, pct, cap, flopSeen)
+    if not flopSeen then return 0 end
+    return math.min(cap, math.floor(totalPot * pct))
+end
+
+-- Deduct `rake` from the pot layers, walking them in order until consumed.
+-- Sequential (not main-pot-only) because in all-in hands the main pot layer can
+-- be smaller than the rake itself (contribs 1/100/100 -> main pot 3, side 198).
+-- Mutates `pots`; returns the amount actually taken.
+function M.takeRake(pots, rake)
+    local left = rake
+    for _, pot in ipairs(pots) do
+        if left <= 0 then break end
+        local take = math.min(pot.amount, left)
+        pot.amount = pot.amount - take
+        left = left - take
+    end
+    return rake - left
+end
+
 -- awardPots assigns each pot to the best hand(s) among its eligible seats.
 -- `handBySeat` maps seat -> rank tuple (only for seats still in at showdown).
 -- Returns { seat = chipsWon }. Split pots share evenly; odd chips go to the

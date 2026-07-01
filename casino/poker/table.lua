@@ -32,10 +32,17 @@ local CFG = {
     BUYIN_STEP   = 100,
     ACTION_TIMEOUT = 30,      -- seconds before auto check/fold
     START_DELAY  = 6,         -- seconds from "enough players" to dealing
+    -- Rake: house takes RAKE_PCT of the pot (capped) on any hand that saw a
+    -- flop ("no flop, no drop"). Credited to HOUSE_ACCOUNT at the bank —
+    -- check profits there with `balance house`.
+    RAKE_PCT     = 0.05,
+    RAKE_CAP     = 30,        -- 3 big blinds
+    HOUSE_ACCOUNT= "house",
 }
 
 local DEVICES_DB = "devices.db"   -- { [pocketId]=deviceKey } authorized pockets
 local SEATS_DB   = "seats.db"     -- crash-recovery snapshot of live chip stacks
+local RAKE_DB    = "rake.db"      -- { pending = uncredited rake, lifetime = total }
 
 -- ─── State ────────────────────────────────────────────────────────────────────
 
@@ -48,6 +55,7 @@ local pendingPair = {} -- pin(string) -> { seat=index }
 local cashoutQueue = {}-- pocketId -> true, processed between hands
 local banner  = "Waiting for players..."
 local inHand  = false  -- true during a hand: defer buy-ins so they can't block play
+local rakeStats = { pending = 0, lifetime = 0 }
 
 -- ─── Peripherals & persistence ────────────────────────────────────────────────
 
@@ -80,6 +88,35 @@ local function persistSeats()
         snap[i] = { accountId = s.accountId, pocketId = s.pocketId, stack = s.stack }
     end
     local f = fs.open(SEATS_DB, "w"); f.write(textutils.serialize(snap)); f.close()
+end
+
+local function persistRake()
+    local f = fs.open(RAKE_DB, "w"); f.write(textutils.serialize(rakeStats)); f.close()
+end
+
+local function loadRake()
+    if fs.exists(RAKE_DB) then
+        local f = fs.open(RAKE_DB, "r"); local raw = f.readAll(); f.close()
+        rakeStats = textutils.unserialize(raw) or { pending = 0, lifetime = 0 }
+    end
+end
+
+-- Add this hand's rake to the pending pile, then try to credit the whole pile
+-- to the house account. If the bank is offline the pile persists and retries
+-- after the next raked hand — house money never evaporates.
+local function bankRake(rake)
+    if rake > 0 then
+        rakeStats.pending  = rakeStats.pending + rake
+        rakeStats.lifetime = rakeStats.lifetime + rake
+        persistRake()
+    end
+    if rakeStats.pending > 0 then
+        local ok = bankc.credit(CFG.HOUSE_ACCOUNT, rakeStats.pending)
+        if ok then
+            rakeStats.pending = 0
+            persistRake()
+        end
+    end
 end
 
 -- On boot, refund any stranded chip stacks back to their bank accounts. We can't
@@ -560,17 +597,21 @@ local function playHand()
         if seats[i].status ~= "folded" then contenders[#contenders + 1] = i end
     end
 
+    -- House rake: % of the total pot, capped; only on hands that saw a flop.
+    local totalPot = 0
+    for _, i in ipairs(order) do totalPot = totalPot + seats[i].committedHand end
+    local flopSeen = #community >= 3
+    local rake = holdem.computeRake(totalPot, CFG.RAKE_PCT, CFG.RAKE_CAP, flopSeen)
+
     local win, handBySeat, results, reveal = {}, {}, {}, {}
 
     if #contenders == 1 then
-        -- Everyone else folded: the last player standing takes the whole pot
-        -- without a showdown (and without needing 5 community cards).
-        local pot = 0
-        for _, i in ipairs(order) do pot = pot + seats[i].committedHand end
+        -- Everyone else folded: the last player standing takes the pot (minus
+        -- rake if a flop was dealt) without a showdown.
         local w = contenders[1]
-        win[w] = pot
-        seats[w].stack = seats[w].stack + pot
-        results[#results + 1] = { seat = w, won = pot, hand = "uncontested" }
+        win[w] = totalPot - rake
+        seats[w].stack = seats[w].stack + win[w]
+        results[#results + 1] = { seat = w, won = win[w], hand = "uncontested" }
     else
         local contrib, folded = {}, {}
         for _, i in ipairs(order) do
@@ -584,7 +625,9 @@ local function playHand()
                 handBySeat[i] = holdem.evaluate7(seven)
             end
         end
-        win = holdem.awardPots(holdem.buildPots(contrib, folded), handBySeat)
+        local pots = holdem.buildPots(contrib, folded)
+        rake = holdem.takeRake(pots, rake)   -- actual amount taken off the top
+        win = holdem.awardPots(pots, handBySeat)
         for i, amt in pairs(win) do
             seats[i].stack = seats[i].stack + amt
             results[#results + 1] = { seat = i, won = amt, hand = handNameOf(handBySeat[i]) }
@@ -595,9 +638,11 @@ local function playHand()
         end
     end
     persistSeats()
+    bankRake(rake)
 
-    rednet.broadcast({ kind = "result", results = results, reveal = reveal, community = community }, pp.PROTOCOL)
-    banner = "Hand complete"
+    rednet.broadcast({ kind = "result", results = results, reveal = reveal,
+        community = community, rake = rake }, pp.PROTOCOL)
+    banner = (rake > 0) and ("Hand complete  (rake " .. rake .. ")") or "Hand complete"
     broadcastState(); render()
     sleep(4)
 
@@ -659,7 +704,7 @@ end
 local function adminLoop()
     print("Poker table admin:")
     print("  device <pocketId> <key>   register a pocket")
-    print("  devices | seats | quit")
+    print("  devices | seats | rake | quit")
     while true do
         io.write("> ")
         local line = io.read()
@@ -676,8 +721,15 @@ local function adminLoop()
             for i, s in pairs(seats) do
                 print(string.format("  seat %d: acct %s stack %d %s", i, tostring(s.accountId), s.stack, s.status))
             end
+        elseif p[1] == "rake" then
+            print(string.format("  lifetime rake: %d credits", rakeStats.lifetime))
+            print(string.format("  pending (not yet banked): %d", rakeStats.pending))
+            print("  house balance: check `balance house` at the bank")
         elseif p[1] == "quit" then
             print("Cashing out all seats..."); for _, s in pairs(seats) do if s.stack > 0 then bankc.credit(s.accountId, s.stack) end end
+            if rakeStats.pending > 0 then
+                print("Banking pending rake..."); bankRake(0)
+            end
             if fs.exists(SEATS_DB) then fs.delete(SEATS_DB) end
             os.queueEvent("terminate_admin")
             return
@@ -691,6 +743,7 @@ local function gameLoop()
     initPeripherals()
     math.randomseed(os.epoch("utc"))
     loadDevices()
+    loadRake()
     recoverStrandedChips()
     rednet.host(pp.PROTOCOL, pp.HOSTNAME)
     while true do

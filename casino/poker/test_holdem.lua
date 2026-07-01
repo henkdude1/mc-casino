@@ -93,4 +93,33 @@ local tieHands = {
 local splitWin = h.awardPots(h.buildPots({ [1] = 100, [2] = 100 }, {}), tieHands)
 ok("split pot 100/100", splitWin[1] == 100 and splitWin[2] == 100)
 
+-- ── Rake ──────────────────────────────────────────────────────────────────────
+ok("no flop no drop", h.computeRake(1000, 0.05, 30, false) == 0)
+ok("5% of 400 = 20", h.computeRake(400, 0.05, 30, true) == 20)
+ok("cap binds at 30 on 1000 pot", h.computeRake(1000, 0.05, 30, true) == 30)
+ok("rounds down (5% of 90 = 4)", h.computeRake(90, 0.05, 30, true) == 4)
+
+-- takeRake walks layers: main pot smaller than the rake
+local rp = { { amount = 3, eligible = { 1, 2, 3 } }, { amount = 198, eligible = { 2, 3 } } }
+local taken = h.takeRake(rp, 10)
+ok("takeRake drains main then side (3+7)", taken == 10 and rp[1].amount == 0 and rp[2].amount == 191)
+ok("takeRake conserves chips", rp[1].amount + rp[2].amount + taken == 201)
+
+-- rake larger than everything (degenerate) takes only what exists
+local rp2 = { { amount = 5, eligible = { 1 } } }
+ok("takeRake capped by pot total", h.takeRake(rp2, 99) == 5 and rp2[1].amount == 0)
+
+-- end-to-end conservation: pot raked then awarded == original total minus rake
+local potsR = h.buildPots({ [1] = 100, [2] = 100, [3] = 50 }, {})
+local rakeR = h.computeRake(250, 0.05, 30, true)   -- 12
+local takenR = h.takeRake(potsR, rakeR)
+local winR = h.awardPots(potsR, {
+    [1] = h.evaluate7(hand("As", "Ad", "Kh", "Qd", "Jc", "2s", "3h")),
+    [2] = h.evaluate7(hand("Ks", "Kd", "Qh", "Jd", "9c", "2s", "3h")),
+    [3] = h.evaluate7(hand("2c", "2h", "7d", "8s", "9h", "4s", "5h")),
+})
+local awardedR = 0
+for _, v in pairs(winR) do awardedR = awardedR + v end
+ok("awarded + rake == original 250", awardedR + takenR == 250)
+
 print(string.format("\n%d passed, %d failed", pass, fail))
