@@ -33,7 +33,7 @@ local CFG = {
 
 -- ─── Peripherals ──────────────────────────────────────────────────────────────
 
-local deposit, vault, mon
+local deposit, vault, mon, monName
 
 local function initPeripherals()
     bankc.open()
@@ -43,9 +43,11 @@ local function initPeripherals()
     if CFG.monitorName and CFG.monitorName ~= "" then
         mon = peripheral.wrap(CFG.monitorName)
         assert(mon, "Monitor not found: " .. CFG.monitorName)
+        monName = CFG.monitorName
     else
         mon = peripheral.find("monitor")
         assert(mon, "No monitor found — attach an Advanced Monitor")
+        monName = peripheral.getName(mon)
     end
     assert(deposit, "Deposit chest not found: " .. CFG.depositName)
     assert(vault,   "Vault not found: "          .. CFG.vaultName)
@@ -299,7 +301,7 @@ local function main()
         local ev = { os.pullEvent() }
         local name = ev[1]
 
-        if name == "monitor_touch" then
+        if name == "monitor_touch" and ev[2] == monName then
             local now = os.epoch("utc")
             if now - lastTouch >= DEBOUNCE_MS then
                 lastTouch = now

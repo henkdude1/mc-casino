@@ -39,7 +39,7 @@ local SEATS_DB   = "seats.db"     -- crash-recovery snapshot of live chip stacks
 
 -- ─── State ────────────────────────────────────────────────────────────────────
 
-local mon
+local mon, monName
 local seats   = {}     -- index -> seat table | nil
 local button  = 0      -- seat index of the dealer button
 local community = {}   -- shared cards on the board
@@ -57,9 +57,11 @@ local function initPeripherals()
     if CFG.monitorName and CFG.monitorName ~= "" then
         mon = peripheral.wrap(CFG.monitorName)
         assert(mon, "Monitor not found: " .. CFG.monitorName)
+        monName = CFG.monitorName
     else
         mon = peripheral.find("monitor")
         assert(mon, "No monitor found — attach an Advanced Monitor")
+        monName = peripheral.getName(mon)
     end
     assert(mon.isColor and mon.isColor(), "Monitor must be an Advanced (color) Monitor")
     mon.setTextScale(CFG.monitorScale)
@@ -204,7 +206,8 @@ local function selectBuyin(maxAffordable)
         btns[#btns+1] = ui.button(mon, 2,        h-3, 10, 3, "CANCEL",  colors.gray,   nil, "cancel")
         local okColor = (amount >= CFG.MIN_BUYIN and amount <= maxAffordable) and colors.green or colors.gray
         btns[#btns+1] = ui.button(mon, w-11,     h-3, 10, 3, "CONFIRM", okColor,       nil, "confirm")
-        local ev = { os.pullEvent("monitor_touch") }
+        local ev
+        repeat ev = { os.pullEvent("monitor_touch") } until ev[2] == monName
         local id = ui.hit(btns, ev[3], ev[4])
         if id == "minus" then amount = math.max(CFG.MIN_BUYIN, amount - CFG.BUYIN_STEP)
         elseif id == "plus" then amount = math.min(maxAffordable, amount + CFG.BUYIN_STEP)

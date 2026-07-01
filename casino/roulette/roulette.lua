@@ -62,16 +62,18 @@ local function columnOf(n) local m = n % 3; return (m == 0) and 3 or m end
 
 -- ─── Peripherals ────────────────────────────────────────────────────────────────
 
-local mon
+local mon, monName
 
 local function initPeripherals()
     bankc.open()
     if CFG.monitorName and CFG.monitorName ~= "" then
         mon = peripheral.wrap(CFG.monitorName)
         assert(mon, "Monitor not found: " .. CFG.monitorName)
+        monName = CFG.monitorName
     else
         mon = peripheral.find("monitor")
         assert(mon, "No monitor found — attach an Advanced Monitor")
+        monName = peripheral.getName(mon)
     end
     assert(mon.isColor and mon.isColor(), "Monitor must be an Advanced (color) Monitor for touch")
     mon.setTextScale(CFG.monitorScale)
@@ -526,7 +528,7 @@ local function main()
         local ev = { os.pullEvent() }
         local name = ev[1]
 
-        if name == "monitor_touch" then
+        if name == "monitor_touch" and ev[2] == monName then
             local now = os.epoch("utc")
             if now - lastTouch >= DEBOUNCE_MS then
                 lastTouch = now
